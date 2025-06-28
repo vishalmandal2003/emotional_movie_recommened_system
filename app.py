@@ -2,7 +2,7 @@ import streamlit as st
 import pickle
 from transformers import pipeline
 from sklearn.utils import shuffle
-
+import torch
 # Load preprocessed movie data
 with open('movie_data.pkl', 'rb') as f:
     movie_df = pickle.load(f)
