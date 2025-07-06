@@ -1,53 +1,68 @@
 import streamlit as st
+import pandas as pd
 import pickle
 from transformers import pipeline
 from sklearn.utils import shuffle
-import torch
-# Load preprocessed movie data
-with open('movie_data.pkl', 'rb') as f:
-    movie_df = pickle.load(f)
 
-# Load sentiment classifier from HuggingFace
-classifier = pipeline("sentiment-analysis")
+# Load the cleaned movie dataset
+with open('new_df.pkl', 'rb') as f:
+    new_df = pickle.load(f)
 
-# Map sentiment to genre-related keywords
+# Load the emotion classification model
+classifier = pipeline("text-classification", 
+                      model="j-hartmann/emotion-english-distilroberta-base", 
+                      top_k=None)
+
 def map_sentiment_to_genres(label):
-    if label == "POSITIVE":
-        return ["comedy", "adventure", "family", "fantasy", "animation"]
-    elif label == "NEGATIVE":
-        return ["romance", "drama", "tragedy", "emotional", "history"]
-    else:
-        return ["thriller", "mystery", "crime", "documentary"]
+    label = label.upper()
+    mood_to_genres = {
+        "JOY": ["comedy", "adventure", "family", "animation", "fantasy"],
+        "SADNESS": ["drama", "romance", "tragedy", "emotional"],
+        "ANGER": ["action", "war", "revenge", "thriller"],
+        "FEAR": ["horror", "thriller", "mystery"],
+        "SURPRISE": ["fantasy", "mystery", "sci-fi"],
+        "DISGUST": ["crime", "psychological"],
+        "NEUTRAL": ["documentary", "history"],
+    }
+    return mood_to_genres.get(label, ["drama"])  # Default fallback
 
-# Recommend movies based on detected sentiment
-def recommend_movies(user_input):
-    result = classifier(user_input)[0]
-    sentiment = result['label']
-    confidence = result['score']
+def recommend_movies_based_on_mood(user_input):
+    # Get list of mood predictions
+    results = classifier(user_input)
 
-    st.write(f"🧠 Detected Sentiment: **{sentiment}** (Confidence: `{confidence:.2f}`)")
+    if isinstance(results[0], list):
+        results = results[0]  # multi-label list
 
-    mood_genres = [g.lower() for g in map_sentiment_to_genres(sentiment)]
+    # Sort by confidence
+    results = sorted(results, key=lambda x: x['score'], reverse=True)
+    top_result = results[0]
+    label = top_result['label'].upper()
 
-    filtered_df = movie_df[movie_df['tags'].apply(lambda tags: any(genre in tags for genre in mood_genres))]
+    st.markdown(f"### 🧠 Detected Emotion: `{label}` ({top_result['score']:.2f})")
+
+    mood_genres = map_sentiment_to_genres(label)
+    st.markdown(f"### 🎭 Target Genres: {', '.join(mood_genres)}")
+
+    # Filter movies
+    filtered_df = new_df[new_df['genres'].apply(
+        lambda genres: isinstance(genres, list) and any(g in genres for g in mood_genres))]
 
     if filtered_df.empty:
-        st.warning("😔 No matching movies found. Try different mood wording.")
-        return None
+        st.warning("No matching movies found for this mood. Try a different emotion or expand genre mapping.")
+        return pd.DataFrame(columns=["title", "vote_average"])
 
-    recommendations = shuffle(filtered_df[['title']]).head(5)
+    # Return top 5 by vote_average
+    recommendations = filtered_df.sort_values(by='vote_average', ascending=False)[['title', 'vote_average']].head(5)
     return recommendations
 
-# Streamlit UI
-st.set_page_config(page_title="Mood-Based Movie Recommender 🎬", layout="centered")
-st.title("🎭 Mood-Based Movie Recommender")
-st.markdown("Get personalized movie recommendations based on your current **emotions**!")
+# ------------------- Streamlit UI -------------------
+st.title("🎬 Emotion-Based Movie Recommender")
+st.write("Tell us how you're feeling, and we'll suggest movies that match your mood!")
 
-user_input = st.text_input("💬 How are you feeling today?")
+user_input = st.text_input("How are you feeling today?")
 
-if st.button("🎬 Recommend Movies") and user_input:
-    recommendations = recommend_movies(user_input)
-    if recommendations is not None:
-        st.subheader("📽️ Top Picks for Your Mood:")
-        for idx, row in recommendations.iterrows():
-            st.markdown(f"✅ **{row['title']}**")
+if user_input:
+    recommendations = recommend_movies_based_on_mood(user_input)
+    if not recommendations.empty:
+        st.markdown("## 🎥 Top Movie Recommendations:")
+        st.dataframe(recommendations.reset_index(drop=True))
